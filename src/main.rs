@@ -3,7 +3,10 @@ extern crate itertools;
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, AddressType};
 use futures::{pin_mut, stream::SelectAll, StreamExt};
 use std::{collections::HashSet, env};
-use cli_table::{Table};
+use tokio::sync::Mutex;
+use cli_table::{Table, print_stdout, WithTitle};
+use std::sync::Arc;
+use std::collections::HashMap;
 
 #[derive(Table)]
 struct BlueboothDevice {
@@ -56,25 +59,38 @@ async fn to_blueboot_device(adapter: &Adapter, addr: Address) -> bluer::Result<B
     })
 }
 
-async fn query_device(blueboot_device: BlueboothDevice) -> bluer::Result<()> {
-    println!("    Address type:       {}", blueboot_device.address);
-    println!("    Name:               {:?}", blueboot_device.name);
-    println!("    Icon:               {:?}", blueboot_device.icon);
-    println!("    Class:              {:?}", blueboot_device.class);
-    println!("    UUIDs:              {:?}", blueboot_device.uuid);
-    println!("    Paried:             {:?}", blueboot_device.paired);
-    println!("    Connected:          {:?}", blueboot_device.connected);
-    println!("    Trusted:            {:?}", blueboot_device.trusted);
-    println!("    Modalias:           {:?}", blueboot_device.modalias);
-    println!("    RSSI:               {:?}", blueboot_device.rssi);
-    println!("    TX power:           {:?}", blueboot_device.tx_power);
-    println!("    Manufacturer data:  {:?}", blueboot_device.manufacturer_data);
-    println!("    Service data:       {:?}", blueboot_device.service_data);
+type SafeBlueboothDeviceMap = Arc<Mutex<HashMap<Address, BlueboothDevice>>>;
+
+fn print_devices<T: Table>(devices: T) -> std::io::Resuit<()> {
+    print_stdout(devices.with_title())?;
+    println!();
+}
+
+async fn add_device(address: Address, device: BlueboothDevice, devices: SafeBlueboothDeviceMap) -> std::io::Result<()> {
+    let mut editable_devices = devices.lock().await;
+    editable_devices.insert(address, device);
+
+
+    print_stdout(editable_devices.values().with_title())?;
+    println!();
+
+    Ok(())
+}
+
+async fn remove_device(address: Address, devices: SafeBlueboothDeviceMap) -> std::io::Result<()> {
+    let mut editable_devices = devices.lock().await;
+    editable_devices.remove(&address);
+
+    print_stdout(editable_devices.values().with_title())?;
+    println!();
+
     Ok(())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> bluer::Result<()> {
+    let devices: SafeBlueboothDeviceMap = Arc::new(Mutex::new(HashMap::new()));
+
     let with_changes = env::args().any(|arg| arg == "--changes");
     let filter_addr: HashSet<_> = env::args().filter_map(|arg| arg.parse::<Address>().ok()).collect();
 
@@ -100,10 +116,9 @@ async fn main() -> bluer::Result<()> {
                             continue;
                         }
 
-                        println!("Device added: {}", addr);
                         let device = to_blueboot_device(&adapter, addr).await?;
-                        
-                        query_device(device).await?;
+
+                        add_device(addr, device, devices.clone()).await?;
                         
 
                         if with_changes {
@@ -113,7 +128,7 @@ async fn main() -> bluer::Result<()> {
                         }
                     }
                     AdapterEvent::DeviceRemoved(addr) => {
-                        println!("Device removed: {}", addr);
+                        remove_device(addr, devices.clone()).await?;
                     }
                     _ => (),
                 }
