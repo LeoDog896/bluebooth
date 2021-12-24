@@ -1,26 +1,66 @@
+extern crate itertools;
 
-  
-//! Discover Bluetooth devices and list them.
-
-use bluer::{Adapter, AdapterEvent, Address, DeviceEvent};
+use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, AddressType};
 use futures::{pin_mut, stream::SelectAll, StreamExt};
 use std::{collections::HashSet, env};
+use cli_table::{Table};
 
-async fn query_device(adapter: &Adapter, addr: Address) -> bluer::Result<()> {
+#[derive(Table)]
+struct BlueboothDevice {
+    #[table(title = "Address")]
+    address: AddressType,
+    #[table(title = "Name")]
+    name: String,
+    #[table(title = "Icon")]
+    icon: String,
+    #[table(title = "Class")]
+    class: String,
+    uuid: String,
+    paired: bool,
+    connected: bool,
+    trusted: bool,
+    modalias: String,
+    rssi: String,
+    tx_power: String,
+    manufacturer_data: String,
+    service_data: String
+}
+
+async fn to_blueboot_device(adapter: &Adapter, addr: Address) -> bluer::Result<BlueboothDevice> {
     let device = adapter.device(addr)?;
-    println!("    Address type:       {}", device.address_type().await?);
-    println!("    Name:               {:?}", device.name().await?);
-    println!("    Icon:               {:?}", device.icon().await?);
-    println!("    Class:              {:?}", device.class().await?);
-    println!("    UUIDs:              {:?}", device.uuids().await?.unwrap_or_default());
-    println!("    Paried:             {:?}", device.is_paired().await?);
-    println!("    Connected:          {:?}", device.is_connected().await?);
-    println!("    Trusted:            {:?}", device.is_trusted().await?);
-    println!("    Modalias:           {:?}", device.modalias().await?);
-    println!("    RSSI:               {:?}", device.rssi().await?);
-    println!("    TX power:           {:?}", device.tx_power().await?);
-    println!("    Manufacturer data:  {:?}", device.manufacturer_data().await?);
-    println!("    Service data:       {:?}", device.service_data().await?);
+    Ok(BlueboothDevice {
+        address: device.address_type().await?,
+        name: device.name().await?.unwrap_or("None".to_string()),
+        icon: device.icon().await?.unwrap_or("None".to_string()),
+        class: device.class().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
+        uuid: device.uuids().await?.map(|it| itertools::join(&it, ", ")).unwrap_or("None".to_string()),
+        paired: device.is_paired().await?,
+        connected: device.is_connected().await?,
+        trusted: device.is_trusted().await?,
+        modalias: device.modalias().await?.map(|it| format!("{:?}", it)).unwrap_or("None".to_string()),
+        rssi: device.rssi().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
+        tx_power: device.tx_power().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
+        manufacturer_data: device.tx_power().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
+        service_data: device.service_data().await?
+            .map(|it| it.iter().map(|(k, v)| format!("{}: {}", k, itertools::join(v, ", "))).collect())
+            .map(|it: HashSet<String>| itertools::join(&it, ", ")).unwrap_or("None".to_string()),
+    })
+}
+
+async fn query_device(blueboot_device: BlueboothDevice) -> bluer::Result<()> {
+    println!("    Address type:       {}", blueboot_device.address);
+    println!("    Name:               {:?}", blueboot_device.name);
+    println!("    Icon:               {:?}", blueboot_device.icon);
+    println!("    Class:              {:?}", blueboot_device.class);
+    println!("    UUIDs:              {:?}", blueboot_device.uuid);
+    println!("    Paried:             {:?}", blueboot_device.paired);
+    println!("    Connected:          {:?}", blueboot_device.connected);
+    println!("    Trusted:            {:?}", blueboot_device.trusted);
+    println!("    Modalias:           {:?}", blueboot_device.modalias);
+    println!("    RSSI:               {:?}", blueboot_device.rssi);
+    println!("    TX power:           {:?}", blueboot_device.tx_power);
+    println!("    Manufacturer data:  {:?}", blueboot_device.manufacturer_data);
+    println!("    Service data:       {:?}", blueboot_device.service_data);
     Ok(())
 }
 
@@ -52,9 +92,10 @@ async fn main() -> bluer::Result<()> {
                         }
 
                         println!("Device added: {}", addr);
-                        if let Err(err) = query_device(&adapter, addr).await {
-                            println!("    Error: {}", &err);
-                        }
+                        let device = to_blueboot_device(&adapter, addr).await?;
+                        
+                        query_device(device).await?;
+                        
 
                         if with_changes {
                             let device = adapter.device(addr)?;
