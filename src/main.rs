@@ -1,71 +1,81 @@
-use gtk::prelude::{BoxExt, ButtonExt, GtkWindowExt, OrientableExt};
-use relm4::{send, AppUpdate, Model, RelmApp, Sender, WidgetPlus, Widgets};
 
-#[derive(Default)]
-struct AppModel {
-    counter: u8,
+  
+//! Discover Bluetooth devices and list them.
+
+use bluer::{Adapter, AdapterEvent, Address, DeviceEvent};
+use futures::{pin_mut, stream::SelectAll, StreamExt};
+use std::{collections::HashSet, env};
+
+async fn query_device(adapter: &Adapter, addr: Address) -> bluer::Result<()> {
+    let device = adapter.device(addr)?;
+    println!("    Address type:       {}", device.address_type().await?);
+    println!("    Name:               {:?}", device.name().await?);
+    println!("    Icon:               {:?}", device.icon().await?);
+    println!("    Class:              {:?}", device.class().await?);
+    println!("    UUIDs:              {:?}", device.uuids().await?.unwrap_or_default());
+    println!("    Paried:             {:?}", device.is_paired().await?);
+    println!("    Connected:          {:?}", device.is_connected().await?);
+    println!("    Trusted:            {:?}", device.is_trusted().await?);
+    println!("    Modalias:           {:?}", device.modalias().await?);
+    println!("    RSSI:               {:?}", device.rssi().await?);
+    println!("    TX power:           {:?}", device.tx_power().await?);
+    println!("    Manufacturer data:  {:?}", device.manufacturer_data().await?);
+    println!("    Service data:       {:?}", device.service_data().await?);
+    Ok(())
 }
 
-enum AppMsg {
-    Increment,
-    Decrement,
-}
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> bluer::Result<()> {
+    let with_changes = env::args().any(|arg| arg == "--changes");
+    let filter_addr: HashSet<_> = env::args().filter_map(|arg| arg.parse::<Address>().ok()).collect();
 
-impl Model for AppModel {
-    type Msg = AppMsg;
-    type Widgets = AppWidgets;
-    type Components = ();
-}
+    env_logger::init();
+    let session = bluer::Session::new().await?;
+    let adapter_names = session.adapter_names().await?;
+    let adapter_name = adapter_names.first().expect("No Bluetooth adapter present");
+    println!("Discovering devices using Bluetooth adapater {}\n", &adapter_name);
+    let adapter = session.adapter(adapter_name)?;
+    adapter.set_powered(true).await?;
 
-impl AppUpdate for AppModel {
-    fn update(&mut self, msg: AppMsg, _components: &(), _sender: Sender<AppMsg>) -> bool {
-        match msg {
-            AppMsg::Increment => {
-                self.counter = self.counter.wrapping_add(1);
+    let device_events = adapter.discover_devices().await?;
+    pin_mut!(device_events);
+
+    let mut all_change_events = SelectAll::new();
+
+    loop {
+        tokio::select! {
+            Some(device_event) = device_events.next() => {
+                match device_event {
+                    AdapterEvent::DeviceAdded(addr) => {
+                        if !filter_addr.is_empty() && !filter_addr.contains(&addr) {
+                            continue;
+                        }
+
+                        println!("Device added: {}", addr);
+                        if let Err(err) = query_device(&adapter, addr).await {
+                            println!("    Error: {}", &err);
+                        }
+
+                        if with_changes {
+                            let device = adapter.device(addr)?;
+                            let change_events = device.events().await?.map(move |evt| (addr, evt));
+                            all_change_events.push(change_events);
+                        }
+                    }
+                    AdapterEvent::DeviceRemoved(addr) => {
+                        println!("Device removed: {}", addr);
+                    }
+                    _ => (),
+                }
+                println!();
             }
-            AppMsg::Decrement => {
-                self.counter = self.counter.wrapping_sub(1);
+            Some((addr, DeviceEvent::PropertyChanged(property))) = all_change_events.next() => {
+                println!("Device changed: {}", addr);
+                println!("    {:?}", property);
             }
-        }
-        true
-    }
-}
-
-#[relm4_macros::widget]
-impl Widgets<AppModel, ()> for AppWidgets {
-    view! {
-        gtk::ApplicationWindow {
-            set_title: Some("Bluebooth"),
-            set_default_width: 300,
-            set_child = Some(&gtk::Box) {
-                set_orientation: gtk::Orientation::Vertical,
-                set_margin_all: 5,
-                set_spacing: 5,
-				append = &gtk::Box {
-					set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 10,
-					append = &gtk::Label {
-						set_margin_all: 5,
-						set_label: watch! { &format!("No devices found") },
-					},
-					append = &gtk::Button {
-						set_label: "Find New Devices",
-						connect_clicked(sender) => move |_| {
-							send!(sender, AppMsg::Increment);
-						},
-					}
-				},
-				append = &gtk::Box {
-					set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 10,
-				}
-            },
+            else => break
         }
     }
-}
 
-fn main() {
-    let model = AppModel::default();
-    let app = RelmApp::new(model);
-    app.run();
+    Ok(())
 }
