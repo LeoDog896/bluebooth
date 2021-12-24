@@ -15,14 +15,23 @@ struct BlueboothDevice {
     icon: String,
     #[table(title = "Class")]
     class: String,
+    #[table(title = "UUID")]
     uuid: String,
+    #[table(title = "Paired")]
     paired: bool,
+    #[table(title = "Connected")]
     connected: bool,
+    #[table(title = "Trusted")]
     trusted: bool,
+    #[table(title = "Modalias")]
     modalias: String,
+    #[table(title = "RSSI")]
     rssi: String,
+    #[table(title = "TX Power")]
     tx_power: String,
+    #[table(title = "Manufacturer Data")]
     manufacturer_data: String,
+    #[table(title = "Service Data")]
     service_data: String
 }
 
