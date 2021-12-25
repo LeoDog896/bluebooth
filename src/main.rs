@@ -7,46 +7,73 @@ use std::{collections::HashSet, env};
 use tokio::sync::RwLock;
 use std::sync::Arc;
 use std::collections::HashMap;
-use prettytable::{Row, Cell};
+use prettytable::{Row, format};
+use terminal_emoji::Emoji;
 
-async fn to_bluetooth_info(adapter: &Adapter, addr: Address) -> bluer::Result<Vec<String>> {
+fn bool_to_emoji(flag: bool) -> Emoji<'static> {
+    if flag {
+        Emoji::new("✅", "true")
+    } else {
+        Emoji::new("❌", "false")
+    }
+}
+
+async fn to_bluetooth_info(adapter: &Adapter, addr: Address) -> bluer::Result<Row> {
+
     let device = adapter.device(addr)?;
-    Ok(vec![
-        device.address_type().await?.to_string(),
-        device.name().await?.unwrap_or("None".to_string()),
-        device.icon().await?.unwrap_or("None".to_string()),
-        device.class().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
-        device.uuids().await?.map(|it| itertools::join(&it, ", ")).unwrap_or("None".to_string()),
-        device.is_paired().await?.to_string(),
-        device.is_connected().await?.to_string(),
-        device.is_trusted().await?.to_string(),
-        device.modalias().await?.map(|it| format!("{:?}", it)).unwrap_or("None".to_string()),
-        device.rssi().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
-        device.tx_power().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
-        device.tx_power().await?.map(|it| it.to_string()).unwrap_or("None".to_string()),
-        device.service_data().await?
+    Ok(row![
+        Fb->device.address_type().await?.to_string(),
+        Fy->device.name().await?.unwrap_or("".to_string()),
+        Fb->device.icon().await?.unwrap_or("".to_string()),
+        Fy->device.class().await?.map(|it| it.to_string()).unwrap_or("".to_string()),
+        Fb->device.uuids().await?.map(|it| itertools::join(&it, ", ")).unwrap_or("".to_string()),
+        Fyc->bool_to_emoji(device.is_paired().await?),
+        Fbc->bool_to_emoji(device.is_connected().await?),
+        Fyc->bool_to_emoji(device.is_trusted().await?),
+        Fb->device.modalias().await?.map(|it| format!("{:?}", it)).unwrap_or("".to_string()),
+        Fy->device.rssi().await?.map(|it| it.to_string()).unwrap_or("".to_string()),
+        Fb->device.tx_power().await?.map(|it| it.to_string()).unwrap_or("".to_string()),
+        Fy->device.service_data().await?
+            .map(|it| it.iter().map(|(_, v)| format!("{}", itertools::join(v, ", "))).collect())
+            .map(|it: HashSet<String>| itertools::join(&it, ", ")).unwrap_or("".to_string()),
+        Fb->device.manufacturer_data().await?
             .map(|it| it.iter().map(|(k, v)| format!("{}: {}", k, itertools::join(v, ", "))).collect())
-            .map(|it: HashSet<String>| itertools::join(&it, ", ")).unwrap_or("None".to_string()),
+            .map(|it: HashSet<String>| itertools::join(&it, ", ")).unwrap_or("".to_string()),
     ])
 }
 
-type ThreadSafeBlueboothDeviceMap = Arc<RwLock<HashMap<Address, Vec<String>>>>;
+type ThreadSafeBlueboothDeviceMap = Arc<RwLock<HashMap<Address, Row>>>;
 
 async fn print_table(devices: ThreadSafeBlueboothDeviceMap) {
     let editable_devices = devices.read().await;
 
-    let mut table = table!(
-        ["Address", "Name", "Icon", "Class", "UUIDs", "Paired", "Connected", "Trusted", "Modalias", "RSSI", "Tx Power", "Service Data"]
-    );
+    let mut table = table!([
+        FBc->"Address",
+        FYc->"Name",
+        FBc->"Icon",
+        FYc->"Class",
+        FBc->"UUIDs",
+        FYc->"Paired",
+        FBc->"Connected",
+        FYc->"Trusted",
+        FBc->"Modalias",
+        FYc->"RSSI",
+        FBc->"Tx Power",
+        FYc->"Service Data",
+        FBc->"Manufacturer Data"
+    ]);
 
-    editable_devices.values().for_each(|device| {
-        table.add_row(Row::new(device.iter().map(|it| Cell::new(&it)).collect()));
-    });
+    let format = *format::consts::FORMAT_BOX_CHARS;
+    table.set_format(format);
+
+    for device in editable_devices.values() {
+        table.add_row(device.to_owned());
+    };
 
     table.printstd();
 }
 
-async fn set_info(address: Address, device_info: Vec<String>, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
+async fn set_info(address: Address, device_info: Row, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
     let mut editable_devices = devices.write().await;
     editable_devices.insert(address, device_info);
 
@@ -64,7 +91,6 @@ async fn remove_info(address: Address, devices: ThreadSafeBlueboothDeviceMap) ->
 async fn main() -> bluer::Result<()> {
     let devices: ThreadSafeBlueboothDeviceMap = Arc::new(RwLock::new(HashMap::new()));
 
-    let with_changes = env::args().any(|arg| arg == "--changes");
     let filter_addr: HashSet<_> = env::args().filter_map(|arg| arg.parse::<Address>().ok()).collect();
 
     let session = bluer::Session::new().await?;
@@ -93,11 +119,9 @@ async fn main() -> bluer::Result<()> {
                         set_info(addr, device, devices.clone()).await?;
                         print_table(devices.clone()).await;
 
-                        if with_changes {
-                            let device = adapter.device(addr)?;
-                            let change_events = device.events().await?.map(move |evt| (addr, evt));
-                            all_change_events.push(change_events);
-                        }
+                        let device = adapter.device(addr)?;
+                        let change_events = device.events().await?.map(move |evt| (addr, evt));
+                        all_change_events.push(change_events);
                     }
                     AdapterEvent::DeviceRemoved(addr) => {
                         remove_info(addr, devices.clone()).await?;
