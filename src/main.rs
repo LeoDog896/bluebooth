@@ -4,7 +4,7 @@ extern crate itertools;
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent};
 use futures::{pin_mut, stream::SelectAll, StreamExt};
 use std::{collections::HashSet, env};
-use tokio::sync::Mutex;
+use tokio::sync::RwLock;
 use std::sync::Arc;
 use std::collections::HashMap;
 use prettytable::{Row, Cell};
@@ -30,10 +30,10 @@ async fn to_bluetooth_info(adapter: &Adapter, addr: Address) -> bluer::Result<Ve
     ])
 }
 
-type ThreadSafeBlueboothDeviceMap = Arc<Mutex<HashMap<Address, Vec<String>>>>;
+type ThreadSafeBlueboothDeviceMap = Arc<RwLock<HashMap<Address, Vec<String>>>>;
 
 async fn print_table(devices: ThreadSafeBlueboothDeviceMap) {
-    let editable_devices = devices.lock().await;
+    let editable_devices = devices.read().await;
 
     let mut table = table!(
         ["Address", "Name", "Icon", "Class", "UUIDs", "Paired", "Connected", "Trusted", "Modalias", "RSSI", "Tx Power", "Service Data"]
@@ -47,26 +47,22 @@ async fn print_table(devices: ThreadSafeBlueboothDeviceMap) {
 }
 
 async fn set_info(address: Address, device_info: Vec<String>, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
-    let mut editable_devices = devices.lock().await;
+    let mut editable_devices = devices.write().await;
     editable_devices.insert(address, device_info);
-
-    print_table(devices.clone()).await;
 
     Ok(())
 }
 
 async fn remove_info(address: Address, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
-    let mut editable_devices = devices.lock().await;
+    let mut editable_devices = devices.write().await;
     editable_devices.remove(&address);
-
-    print_table(devices.clone()).await;
 
     Ok(())
 }
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> bluer::Result<()> {
-    let devices: ThreadSafeBlueboothDeviceMap = Arc::new(Mutex::new(HashMap::new()));
+    let devices: ThreadSafeBlueboothDeviceMap = Arc::new(RwLock::new(HashMap::new()));
 
     let with_changes = env::args().any(|arg| arg == "--changes");
     let filter_addr: HashSet<_> = env::args().filter_map(|arg| arg.parse::<Address>().ok()).collect();
@@ -95,6 +91,7 @@ async fn main() -> bluer::Result<()> {
                         let device = to_bluetooth_info(&adapter, addr).await?;
 
                         set_info(addr, device, devices.clone()).await?;
+                        print_table(devices.clone()).await;
 
                         if with_changes {
                             let device = adapter.device(addr)?;
@@ -104,6 +101,7 @@ async fn main() -> bluer::Result<()> {
                     }
                     AdapterEvent::DeviceRemoved(addr) => {
                         remove_info(addr, devices.clone()).await?;
+                        print_table(devices.clone()).await;
                     }
                     _ => (),
                 }
