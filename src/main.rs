@@ -1,16 +1,17 @@
 extern crate itertools;
-#[macro_use] extern crate prettytable;
+#[macro_use]
+extern crate prettytable;
 
-use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, Device, DeviceProperty};
+use anyhow::{Context, Error, Result};
+use bluer::{Adapter, AdapterEvent, Address, Device, DeviceEvent, DeviceProperty};
 use futures::{pin_mut, stream::SelectAll, StreamExt};
-use std::{collections::HashSet, env};
-use tokio::sync::RwLock;
-use std::sync::Arc;
-use std::collections::HashMap;
-use prettytable::{Row, format};
-use terminal_emoji::Emoji;
+use prettytable::{format, Row};
 use single::Single;
-use anyhow::{Result, Context, Error};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::{collections::HashSet, env};
+use terminal_emoji::Emoji;
+use tokio::sync::RwLock;
 
 fn bool_to_emoji<'a>(flag: bool) -> Emoji<'a> {
     if flag {
@@ -27,19 +28,25 @@ fn get_device(adapter: &Adapter, addr: Address) -> bluer::Result<Device> {
 }
 
 async fn to_bluetooth_info(device: &Device) -> Result<Row> {
-
     let service_data = device.service_data().await?;
-    
-    let service_data_string = service_data.map(|data| {
-        if data.len() == 1 {
-            data.values().single().map_err(Error::msg).context("Could not get first element even though array length is one")
-                .map(|v| itertools::join(v, ", "))
-        } else {
-            Ok(itertools::join(
-                data.iter()
-                    .map(|(k, v)| format!("{:?}: {}", k, itertools::join(v, ", "))), ", "))
-        }
-    }).unwrap_or_else(|| Ok("".to_string()))?;
+
+    let service_data_string = service_data
+        .map(|data| {
+            if data.len() == 1 {
+                data.values()
+                    .single()
+                    .map_err(Error::msg)
+                    .context("Could not get first element even though array length is one")
+                    .map(|v| itertools::join(v, ", "))
+            } else {
+                Ok(itertools::join(
+                    data.iter()
+                        .map(|(k, v)| format!("{:?}: {}", k, itertools::join(v, ", "))),
+                    ", ",
+                ))
+            }
+        })
+        .unwrap_or_else(|| Ok("".to_string()))?;
 
     Ok(row![
         Fb->device.address_type().await?.to_string(),
@@ -60,12 +67,12 @@ async fn to_bluetooth_info(device: &Device) -> Result<Row> {
     ])
 }
 
-type ThreadSafeBlueboothDeviceMap = 
-    // Concurrency safe. We read and write a lot.
-    Arc<RwLock<
+type ThreadSafeBlueboothDeviceMap = Arc<
+    RwLock<
         // The devices address (for easy lookup) to the Row containing its data,
-        HashMap<Address, Device>
-    >>;
+        HashMap<Address, Device>,
+    >,
+>;
 
 async fn print_table(devices: ThreadSafeBlueboothDeviceMap) -> Result<()> {
     let editable_devices = devices.read().await;
@@ -88,36 +95,47 @@ async fn print_table(devices: ThreadSafeBlueboothDeviceMap) -> Result<()> {
 
     let format = *format::consts::FORMAT_BOX_CHARS;
     table.set_format(format);
- 
+
     for device in editable_devices.values() {
         table.add_row(to_bluetooth_info(device).await?.clone());
-    };
+    }
 
     table.printstd();
 
     Ok(())
 }
 
-async fn set_info(address: Address, device: Device, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
+async fn set_info(
+    address: Address,
+    device: Device,
+    devices: ThreadSafeBlueboothDeviceMap,
+) -> std::io::Result<()> {
     let mut writable_devices = devices.write().await;
     writable_devices.insert(address, device);
 
     Ok(())
 }
 
-async fn remove_info(address: Address, devices: ThreadSafeBlueboothDeviceMap) -> std::io::Result<()> {
+async fn remove_info(
+    address: Address,
+    devices: ThreadSafeBlueboothDeviceMap,
+) -> std::io::Result<()> {
     let mut writable_devices = devices.write().await;
     writable_devices.remove(&address);
 
     Ok(())
 }
 
-async fn change_info(address: Address, devices: ThreadSafeBlueboothDeviceMap, property: DeviceProperty) {
+async fn change_info(
+    address: Address,
+    devices: ThreadSafeBlueboothDeviceMap,
+    property: DeviceProperty,
+) {
     let readable_devices = devices.read().await;
-    
+
     let device = match readable_devices.get(&address) {
         None => return,
-        Some(x) => x
+        Some(x) => x,
     };
 
     let mut writable_devices = devices.write().await;
@@ -128,12 +146,19 @@ async fn change_info(address: Address, devices: ThreadSafeBlueboothDeviceMap, pr
 async fn main() -> Result<()> {
     let devices: ThreadSafeBlueboothDeviceMap = Arc::new(RwLock::new(HashMap::new()));
 
-    let filter_addr: HashSet<_> = env::args().filter_map(|arg| arg.parse::<Address>().ok()).collect();
+    let filter_addr: HashSet<_> = env::args()
+        .filter_map(|arg| arg.parse::<Address>().ok())
+        .collect();
 
     let session = bluer::Session::new().await?;
     let adapter_names = session.adapter_names().await?;
-    let adapter_name = adapter_names.first().context("No Bluetooth adapter present")?;
-    println!("Discovering devices using Bluetooth adapater {}\n", &adapter_name);
+    let adapter_name = adapter_names
+        .first()
+        .context("No Bluetooth adapter present")?;
+    println!(
+        "Discovering devices using Bluetooth adapater {}\n",
+        &adapter_name
+    );
     let adapter = session.adapter(adapter_name)?;
     adapter.set_powered(true).await?;
 
