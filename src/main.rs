@@ -2,8 +2,10 @@ extern crate itertools;
 #[macro_use]
 extern crate prettytable;
 
+mod device_processor;
+
 use anyhow::{Context, Error, Result};
-use bluer::{Adapter, AdapterEvent, Address, Device, DeviceEvent, DeviceProperty};
+use bluer::{Adapter, AdapterEvent, Address, Device, DeviceEvent, DeviceProperty, AddressType, Modalias};
 use futures::{pin_mut, stream::SelectAll, StreamExt};
 use prettytable::{format, Row};
 use single::Single;
@@ -49,7 +51,7 @@ async fn to_bluetooth_info(device: &Device) -> Result<Row> {
         .unwrap_or_else(|| Ok("".to_string()))?;
 
     Ok(row![
-        Fb->device.address_type().await?.to_string(),
+        Fb->device.address().to_string(),
         Fy->device.name().await?.unwrap_or_else(|| "".to_string()),
         Fb->device.icon().await?.unwrap_or_else(|| "".to_string()),
         Fy->device.class().await?.map(|it| it.to_string()).unwrap_or_else(|| "".to_string()),
@@ -78,19 +80,19 @@ async fn print_table(devices: ThreadSafeBlueboothDeviceMap) -> Result<()> {
     let editable_devices = devices.read().await;
 
     let mut table = table!([
-        FBc->"Address",
-        FYc->"Name",
-        FBc->"Icon",
-        FYc->"Class",
-        FBc->"UUIDs",
-        FYc->"Paired",
-        FBc->"Connected",
-        FYc->"Trusted",
-        FBc->"Modalias",
-        FYc->"RSSI",
-        FBc->"Tx Power",
-        FYc->"Service Data",
-        FBc->"Manufacturer Data"
+        BBc->"Address",
+        BYc->"Name",
+        BBc->"Icon",
+        BYc->"Class",
+        BBc->"UUIDs",
+        BYc->"Paired",
+        BBc->"Connected",
+        BYc->"Trusted",
+        BBc->"Modalias",
+        BYc->"RSSI",
+        BBc->"Tx Power",
+        BYc->"Service Data",
+        Bc->"Manufacturer Data"
     ]);
 
     let format = *format::consts::FORMAT_BOX_CHARS;
@@ -130,16 +132,44 @@ async fn change_info(
     address: Address,
     devices: ThreadSafeBlueboothDeviceMap,
     property: DeviceProperty,
-) {
+) -> Result<()> {
     let readable_devices = devices.read().await;
 
     let device = match readable_devices.get(&address) {
-        None => return,
+        None => return Ok(()),
         Some(x) => x,
     };
 
+    let devices = devices.clone();
     let mut writable_devices = devices.write().await;
+
+    match property {
+        DeviceProperty::Name(name) => device.set_alias(name).await?,
+        DeviceProperty::AddressType(address_type) => todo!(),
+        DeviceProperty::Icon(icon) => todo!(),
+        DeviceProperty::Class(class) => todo!(),
+        DeviceProperty::Appearance(appearance) => todo!(),
+        DeviceProperty::Uuids(uuids) => todo!(),
+        DeviceProperty::Paired(paired) => todo!(),
+        DeviceProperty::Connected(connected) => todo!(),
+        DeviceProperty::Trusted(trusted) => todo!(),
+        DeviceProperty::Blocked(blocked) => todo!(),
+        DeviceProperty::WakeAllowed(wake_allowed) => todo!(),
+        DeviceProperty::Alias(alias) => device.set_alias(alias).await?,
+        DeviceProperty::LegacyPairing(legacy_pairing) => todo!(),
+        DeviceProperty::Modalias(modalias) => todo!(),
+        DeviceProperty::Rssi(rssi) => todo!(),
+        DeviceProperty::TxPower(tx_power) => todo!(),
+        DeviceProperty::ManufacturerData(manufacturer_data) => todo!(),
+        DeviceProperty::ServiceData(service_data) => todo!(),
+        DeviceProperty::ServicesResolved(services_resolved) => todo!(),
+        DeviceProperty::AdvertisingFlags(advertising_flags) => todo!(),
+        DeviceProperty::AdvertisingData(advertising_data) => todo!(),
+    };
+
     writable_devices.insert(address, device.clone());
+
+    Ok(())
 }
 
 #[tokio::main(flavor = "current_thread")]
